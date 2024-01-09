@@ -95,6 +95,7 @@ using TracksExtraWithPIDandLabels = soa::Join<aod::TracksExtra, aod::pidTPCFullP
 
 // Pre-selected V0s
 using V0full = soa::Join<aod::V0Datas, aod::V0Covs>;
+using V0fCfull = soa::Join<aod::V0fCDatas, aod::V0fCCovs>;
 using TaggedCascades = soa::Join<aod::Cascades, aod::CascTags>;
 
 // For MC association in pre-selection
@@ -109,7 +110,8 @@ struct cascadeBuilder {
   Produces<aod::StoredCascCores> cascdata;
   Produces<aod::StoredKFCascCores> kfcascdata;
   Produces<aod::StoredTraCascCores> trackedcascdata;
-  Produces<aod::CascBBs> cascbb;
+  Produces<aod::CascTrackXs> cascTrackXs; // if desired for replaying of position information
+  Produces<aod::CascBBs> cascbb;          // if enabled
   Produces<aod::CascCovs> casccovs; // if requested by someone
   Produces<aod::KFCascCovs> kfcasccovs; // if requested by someone
   Service<o2::ccdb::BasicCCDBManager> ccdb;
@@ -118,6 +120,7 @@ struct cascadeBuilder {
 
   // Configurables related to table creation
   Configurable<int> createCascCovMats{"createCascCovMats", -1, {"Produces V0 cov matrices. -1: auto, 0: don't, 1: yes. Default: auto (-1)"}};
+  Configurable<int> createCascTrackXs{"createCascTrackXs", -1, {"Produces track X at minima table. -1: auto, 0: don't, 1: yes. Default: auto (-1)"}};
 
   // Topological selection criteria
   Configurable<int> tpcrefit{"tpcrefit", 0, "demand TPC refit"};
@@ -216,7 +219,12 @@ struct cascadeBuilder {
   // Helper struct to pass cascade information
   struct {
     int v0Id;
+    int positiveId;
+    int negativeId;
     int bachelorId;
+    float positiveX;
+    float negativeX;
+    float bachelorX;
     int charge;
     std::array<float, 3> pos;
     std::array<float, 3> bachP;
@@ -229,6 +237,12 @@ struct cascadeBuilder {
     std::array<float, 3> v0pos;
     std::array<float, 3> v0mompos;
     std::array<float, 3> v0momneg;
+    std::array<float, 3> v0momposerr;
+    std::array<float, 3> v0momnegerr;
+    std::array<float, 3> v0postrack;
+    std::array<float, 3> v0negtrack;
+    std::array<float, 3> v0postrackerr;
+    std::array<float, 3> v0negtrackerr;
     std::array<float, 3> cascademom;
     std::array<float, 3> v0mom;
     float v0dcadau;
@@ -533,6 +547,11 @@ struct cascadeBuilder {
             LOGF(info, "Device named %s has subscribed to CascCovs table! Enabling.", device.name);
             createCascCovMats.value = 1;
           }
+          const std::string CascTracksXName = "CascTrackXs";
+          if (input.matcher.binding == CascTracksXName) {
+            LOGF(info, "Device named %s has subscribed to CascTrackXs table! Enabling.", device.name);
+            createCascTrackXs.value = 1;
+          }
         }
       }
 
@@ -764,19 +783,14 @@ struct cascadeBuilder {
     // to be added here as complementary information in the future
   }
 
-  template <class TTrackTo, typename TCascObject>
-  bool buildCascadeCandidate(TCascObject const& cascade)
+  template <class TTrackTo, typename TCascObject, typename TV0Object>
+  bool buildCascadeCandidate(TCascObject const& cascade, TV0Object const& v0)
   {
     // value 0.5: any considered cascade
     statisticsRegistry.cascstats[kCascAll]++;
 
     // Track casting
     auto bachTrack = cascade.template bachelor_as<TTrackTo>();
-    auto v0index = cascade.template v0_as<o2::aod::V0sLinked>();
-    if (!(v0index.has_v0Data())) {
-      return false;
-    }
-    auto v0 = v0index.template v0Data_as<V0full>();
     auto posTrack = v0.template posTrack_as<TTrackTo>();
     auto negTrack = v0.template negTrack_as<TTrackTo>();
     auto const& collision = cascade.collision();
@@ -937,8 +951,13 @@ struct cascadeBuilder {
     cascadecandidate.yOmega = RecoDecay::y(array{cascadecandidate.bachP[0] + v0.pxpos() + v0.pxneg(), cascadecandidate.bachP[1] + v0.pypos() + v0.pyneg(), cascadecandidate.bachP[2] + v0.pzpos() + v0.pzneg()}, o2::constants::physics::MassOmegaMinus);
 
     // Populate information
-    cascadecandidate.v0Id = v0index.globalIndex();
+    // cascadecandidate.v0Id = v0index.globalIndex();
+    cascadecandidate.positiveId = posTrack.globalIndex();
+    cascadecandidate.negativeId = negTrack.globalIndex();
     cascadecandidate.bachelorId = bachTrack.globalIndex();
+    cascadecandidate.positiveX = v0.posX();             // from prior minimization
+    cascadecandidate.negativeX = v0.negX();             // from prior minimization
+    cascadecandidate.bachelorX = lBachelorTrack.getX(); // from this minimization
     cascadecandidate.v0pos[0] = v0.x();
     cascadecandidate.v0pos[1] = v0.y();
     cascadecandidate.v0pos[2] = v0.z();
@@ -1072,6 +1091,7 @@ struct cascadeBuilder {
       massNegTrack = o2::constants::physics::MassProton;
     }
 
+  
     //__________________________________________
     //*>~<* step 1 : V0 with dca fitter, uses material corrections implicitly
     // This is optional - move close to minima and therefore take material
@@ -1211,6 +1231,8 @@ struct cascadeBuilder {
 
     // basic indices
     cascadecandidate.v0Id = v0.globalIndex();
+    cascadecandidate.positiveId = posTrack.globalIndex();
+    cascadecandidate.negativeId = negTrack.globalIndex();
     cascadecandidate.bachelorId = bachTrack.globalIndex();
 
     // KF chi2
@@ -1219,10 +1241,30 @@ struct cascadeBuilder {
     if (kfTuneForOmega)
       cascadecandidate.kfCascadeChi2 = KFOmega.GetChi2();
 
-    // Daughter momentum not KF-updated FIXME
+    // Daughter momentum not KF-updated FIXME --> but DCA fitter updated if pre-minimisation is used!!
     lBachelorTrack.getPxPyPzGlo(cascadecandidate.bachP);
     posTrackParCov.getPxPyPzGlo(cascadecandidate.v0mompos);
     negTrackParCov.getPxPyPzGlo(cascadecandidate.v0momneg);
+    // uncertainties
+    std::array<float, 21> cvpos, cvneg;
+    posTrackParCov.getCovXYZPxPyPzGlo(cvpos);
+    negTrackParCov.getCovXYZPxPyPzGlo(cvneg);
+    cascadecandidate.v0momposerr[0] = sqrt(cvpos[9]);
+    cascadecandidate.v0momposerr[1] = sqrt(cvpos[14]);
+    cascadecandidate.v0momposerr[2] = sqrt(cvpos[21]);
+    cascadecandidate.v0momnegerr[0] = sqrt(cvneg[9]);
+    cascadecandidate.v0momnegerr[1] = sqrt(cvneg[14]);
+    cascadecandidate.v0momnegerr[2] = sqrt(cvneg[21]);
+
+    // Daughter track position at vertex
+    posTrackParCov.getXYZGlo(cascadecandidate.v0postrack);
+    negTrackParCov.getXYZGlo(cascadecandidate.v0negtrack);
+    cascadecandidate.v0postrackerr[0] = sqrt(cvpos[0]);
+    cascadecandidate.v0postrackerr[1] = sqrt(cvpos[2]);
+    cascadecandidate.v0postrackerr[2] = sqrt(cvpos[5]);
+    cascadecandidate.v0negtrackerr[0] = sqrt(cvneg[0]);
+    cascadecandidate.v0negtrackerr[1] = sqrt(cvneg[2]);
+    cascadecandidate.v0negtrackerr[2] = sqrt(cvneg[5]);
 
     // mother position information from KF
     cascadecandidate.v0pos[0] = KFV0.GetX();
@@ -1300,11 +1342,26 @@ struct cascadeBuilder {
     statisticsRegistry.eventCounter++;
 
     for (auto& cascade : cascades) {
-      bool validCascadeCandidate = buildCascadeCandidate<TTrackTo>(cascade);
+      // de-reference from V0 pool, either specific for cascades or general
+      // use templatizing to avoid code duplication
+      bool validCascadeCandidate = false;
+      auto v0index = cascade.template v0_as<o2::aod::V0sLinked>();
+      if (v0index.has_v0Data()) {
+        // this V0 passed both standard V0 and cascade V0 selections
+        auto v0row = v0index.template v0Data_as<V0full>();
+        validCascadeCandidate = buildCascadeCandidate<TTrackTo>(cascade, v0row);
+      } else if (v0index.has_v0fCData()) {
+        // this V0 passes only V0-for-cascade selections, use that instead
+        auto v0row = v0index.template v0fCData_as<V0fCfull>();
+        validCascadeCandidate = buildCascadeCandidate<TTrackTo>(cascade, v0row);
+      } else {
+        continue; // this was inadequately linked, should not happen
+      }
       if (!validCascadeCandidate)
         continue; // doesn't pass cascade selections
 
-      cascidx(cascadecandidate.v0Id, cascade.globalIndex(),
+      cascidx(/*cascadecandidate.v0Id, */ cascade.globalIndex(),
+              cascadecandidate.positiveId, cascadecandidate.negativeId,
               cascadecandidate.bachelorId, cascade.collisionId());
       cascdata(cascadecandidate.charge, cascadecandidate.mXi, cascadecandidate.mOmega,
                cascadecandidate.pos[0], cascadecandidate.pos[1], cascadecandidate.pos[2],
@@ -1318,6 +1375,9 @@ struct cascadeBuilder {
                cascadecandidate.v0dcadau, cascadecandidate.dcacascdau,
                cascadecandidate.v0dcapostopv, cascadecandidate.v0dcanegtopv,
                cascadecandidate.bachDCAxy, cascadecandidate.cascDCAxy, cascadecandidate.cascDCAz); // <--- no corresponding stratrack information available
+      if (createCascTrackXs) {
+        cascTrackXs(cascadecandidate.positiveX, cascadecandidate.negativeX, cascadecandidate.bachelorX);
+      }
       cascbb(cascadecandidate.bachBaryonCosPA, cascadecandidate.bachBaryonDCAxyToPV);
 
       // populate cascade covariance matrices if required by any other task
@@ -1360,14 +1420,21 @@ struct cascadeBuilder {
         continue; // doesn't pass cascade selections
       registry.fill(HIST("hKFParticleStatistics"), 2.0f);
 
-      kfcascidx(cascadecandidate.v0Id, cascade.globalIndex(),
+      kfcascidx(/*cascadecandidate.v0Id, */ cascade.globalIndex(),
+                cascadecandidate.positiveId, cascadecandidate.negativeId,
                 cascadecandidate.bachelorId, cascade.collisionId());
       kfcascdata(cascadecandidate.charge, cascadecandidate.mXi, cascadecandidate.mOmega,
                  cascadecandidate.pos[0], cascadecandidate.pos[1], cascadecandidate.pos[2],
                  cascadecandidate.v0pos[0], cascadecandidate.v0pos[1], cascadecandidate.v0pos[2],
+                 cascadecandidate.v0postrack[0], cascadecandidate.v0postrack[1], cascadecandidate.v0postrack[2],
+                 cascadecandidate.v0negtrack[0], cascadecandidate.v0negtrack[1], cascadecandidate.v0negtrack[2],
+                 cascadecandidate.v0postrackerr[0], cascadecandidate.v0postrackerr[1], cascadecandidate.v0postrackerr[2],
+                 cascadecandidate.v0negtrackerr[0], cascadecandidate.v0negtrackerr[1], cascadecandidate.v0negtrackerr[2],
                  cascadecandidate.v0mompos[0], cascadecandidate.v0mompos[1], cascadecandidate.v0mompos[2],
                  cascadecandidate.v0momneg[0], cascadecandidate.v0momneg[1], cascadecandidate.v0momneg[2],
                  cascadecandidate.bachP[0], cascadecandidate.bachP[1], cascadecandidate.bachP[2],
+                 cascadecandidate.v0momposerr[0], cascadecandidate.v0momposerr[1], cascadecandidate.v0momposerr[2],
+                 cascadecandidate.v0momnegerr[0], cascadecandidate.v0momnegerr[1], cascadecandidate.v0momnegerr[2],
                  cascadecandidate.v0mom[0], cascadecandidate.v0mom[1], cascadecandidate.v0mom[2],
                  cascadecandidate.cascademom[0], cascadecandidate.cascademom[1], cascadecandidate.cascademom[2],
                  cascadecandidate.v0dcadau, cascadecandidate.dcacascdau,
@@ -1407,12 +1474,27 @@ struct cascadeBuilder {
         continue; // wasn't tracked
       }
 
-      bool validCascadeCandidate = buildCascadeCandidate<TTrackTo>(cascade);
+      // de-reference from V0 pool, either specific for cascades or general
+      // use templatizing to avoid code duplication
+      bool validCascadeCandidate = false;
+      auto v0index = cascade.template v0_as<o2::aod::V0sLinked>();
+      if (v0index.has_v0Data()) {
+        // this V0 passed both standard V0 and cascade V0 selections
+        auto v0row = v0index.template v0Data_as<V0full>();
+        validCascadeCandidate = buildCascadeCandidate<TTrackTo>(cascade, v0row);
+      } else if (v0index.has_v0fCData()) {
+        // this V0 passes only V0-for-cascade selections, use that instead
+        auto v0row = v0index.template v0fCData_as<V0fCfull>();
+        validCascadeCandidate = buildCascadeCandidate<TTrackTo>(cascade, v0row);
+      } else {
+        continue; // this was inadequately linked, should not happen
+      }
       if (!validCascadeCandidate)
         continue; // doesn't pass cascade selections
 
       // fill regular tables (no strangeness tracking)
-      cascidx(cascadecandidate.v0Id, cascade.globalIndex(),
+      cascidx(/*cascadecandidate.v0Id, */ cascade.globalIndex(),
+              cascadecandidate.positiveId, cascadecandidate.negativeId,
               cascadecandidate.bachelorId, cascade.collisionId());
       cascdata(cascadecandidate.charge, cascadecandidate.mXi, cascadecandidate.mOmega,
                cascadecandidate.pos[0], cascadecandidate.pos[1], cascadecandidate.pos[2],
@@ -1426,6 +1508,9 @@ struct cascadeBuilder {
                cascadecandidate.v0dcadau, cascadecandidate.dcacascdau,
                cascadecandidate.v0dcapostopv, cascadecandidate.v0dcanegtopv,
                cascadecandidate.bachDCAxy, cascadecandidate.cascDCAxy, cascadecandidate.cascDCAz); // <--- no corresponding stratrack information available
+      if (createCascTrackXs) {
+        cascTrackXs(cascadecandidate.positiveX, cascadecandidate.negativeX, cascadecandidate.bachelorX);
+      }
       cascbb(cascadecandidate.bachBaryonCosPA, cascadecandidate.bachBaryonDCAxyToPV);
 
       // populate cascade covariance matrices if required by any other task
@@ -1561,8 +1646,9 @@ struct cascadeBuilder {
         std::array<float, 3> cascadeMomentumVector;
         cascadeTrackPar.getPxPyPzGlo(cascadeMomentumVector);
 
-        trackedcascidx(cascadecandidate.v0Id, cascade.globalIndex(), cascadecandidate.bachelorId,
-                       trackedCascade.trackId(), cascade.collisionId());
+        trackedcascidx(/*cascadecandidate.v0Id, */ cascade.globalIndex(),
+                       cascadecandidate.positiveId, cascadecandidate.negativeId,
+                       cascadecandidate.bachelorId, trackedCascade.trackId(), cascade.collisionId());
         trackedcascdata(cascadecandidate.charge, trackedCascade.xiMass(), trackedCascade.omegaMass(), // <--- stratrack masses
                         trackedCascade.decayX(), trackedCascade.decayY(), trackedCascade.decayZ(),    // <--- stratrack position
                         cascadecandidate.v0pos[0], cascadecandidate.v0pos[1], cascadecandidate.v0pos[2],
@@ -1581,7 +1667,7 @@ struct cascadeBuilder {
     resetHistos();
   }
 
-  void processRun2(aod::Collisions const& collisions, aod::V0sLinked const&, V0full const&, soa::Filtered<TaggedCascades> const& cascades, FullTracksExt const&, aod::BCsWithTimestamps const&)
+  void processRun2(aod::Collisions const& collisions, aod::V0sLinked const&, V0full const&, V0fCfull const&, soa::Filtered<TaggedCascades> const& cascades, FullTracksExt const&, aod::BCsWithTimestamps const&)
   {
     for (const auto& collision : collisions) {
       // Fire up CCDB
@@ -1595,7 +1681,7 @@ struct cascadeBuilder {
   }
   PROCESS_SWITCH(cascadeBuilder, processRun2, "Produce Run 2 cascade tables", false);
 
-  void processRun3(aod::Collisions const& collisions, aod::V0sLinked const&, V0full const&, soa::Filtered<TaggedCascades> const& cascades, FullTracksExtIU const&, aod::BCsWithTimestamps const&)
+  void processRun3(aod::Collisions const& collisions, aod::V0sLinked const&, V0full const&, V0fCfull const&, soa::Filtered<TaggedCascades> const& cascades, FullTracksExtIU const&, aod::BCsWithTimestamps const&)
   {
     for (const auto& collision : collisions) {
       // Fire up CCDB
@@ -1623,7 +1709,7 @@ struct cascadeBuilder {
   }
   PROCESS_SWITCH(cascadeBuilder, processRun3withKFParticle, "Produce Run 3 KF cascade tables", false);
 
-  void processRun3withStrangenessTracking(aod::Collisions const& collisions, aod::V0sLinked const&, V0full const&, soa::Filtered<TaggedCascades> const& cascades, FullTracksExtIU const&, aod::BCsWithTimestamps const&, aod::TrackedCascades const& trackedCascades)
+  void processRun3withStrangenessTracking(aod::Collisions const& collisions, aod::V0sLinked const&, V0full const&, V0fCfull const&, soa::Filtered<TaggedCascades> const& cascades, FullTracksExtIU const&, aod::BCsWithTimestamps const&, aod::TrackedCascades const& trackedCascades)
   {
     for (const auto& collision : collisions) {
       // Fire up CCDB
@@ -1737,16 +1823,12 @@ struct cascadePreselector {
   template <class TTrackTo, typename TCascadeObject>
   void checkTrackQuality(TCascadeObject const& lCascadeCandidate, uint16_t& maskElement, bool passdEdx = false)
   {
-    auto v0 = lCascadeCandidate.template v0_as<o2::aod::V0sLinked>();
-    if (!(v0.has_v0Data())) {
-      return;
-    }
-    auto v0data = v0.v0Data(); // de-reference index to correct v0data in case it exists
+    auto v0 = lCascadeCandidate.template v0_as<o2::aod::V0s>();
 
     // Acquire all three daughter tracks, please
     auto lBachTrack = lCascadeCandidate.template bachelor_as<TTrackTo>();
-    auto lNegTrack = v0data.template negTrack_as<TTrackTo>();
-    auto lPosTrack = v0data.template posTrack_as<TTrackTo>();
+    auto lNegTrack = v0.template negTrack_as<TTrackTo>();
+    auto lPosTrack = v0.template posTrack_as<TTrackTo>();
 
     if (doQA) {
       histos.fill(HIST("hTrackStat"), packTrackProperties(lPosTrack), packTrackProperties(lNegTrack), packTrackProperties(lBachTrack));
@@ -1775,17 +1857,13 @@ struct cascadePreselector {
   template <class TTrackTo, typename TCascadeObject>
   void checkPDG(TCascadeObject const& lCascadeCandidate, uint16_t& maskElement)
   {
-    auto v0 = lCascadeCandidate.template v0_as<o2::aod::V0sLinked>();
-    if (!(v0.has_v0Data())) {
-      return;
-    }
-    auto v0data = v0.v0Data(); // de-reference index to correct v0data in case it exists
     int lPDG = -1;
 
     // Acquire all three daughter tracks, please
     auto lBachTrack = lCascadeCandidate.template bachelor_as<TTrackTo>();
-    auto lNegTrack = v0data.template negTrack_as<TTrackTo>();
-    auto lPosTrack = v0data.template posTrack_as<TTrackTo>();
+    auto v0 = lCascadeCandidate.template v0_as<o2::aod::V0s>();
+    auto lNegTrack = v0.template negTrack_as<TTrackTo>();
+    auto lPosTrack = v0.template posTrack_as<TTrackTo>();
 
     // Association check
     // There might be smarter ways of doing this in the future
@@ -1840,16 +1918,11 @@ struct cascadePreselector {
   template <class TTrackTo, typename TCascadeObject>
   void checkdEdx(TCascadeObject const& lCascadeCandidate, uint16_t& maskElement)
   {
-    auto v0 = lCascadeCandidate.template v0_as<o2::aod::V0sLinked>();
-    if (!(v0.has_v0Data())) {
-      return;
-    }
-    auto v0data = v0.v0Data(); // de-reference index to correct v0data in case it exists
-
     // Acquire all three daughter tracks, please
     auto lBachTrack = lCascadeCandidate.template bachelor_as<TTrackTo>();
-    auto lNegTrack = v0data.template negTrack_as<TTrackTo>();
-    auto lPosTrack = v0data.template posTrack_as<TTrackTo>();
+    auto v0 = lCascadeCandidate.template v0_as<o2::aod::V0s>();
+    auto lNegTrack = v0.template negTrack_as<TTrackTo>();
+    auto lPosTrack = v0.template posTrack_as<TTrackTo>();
 
     // dEdx check with LF PID
     if (TMath::Abs(lNegTrack.tpcNSigmaPi()) < ddEdxPreSelectionWindow &&
@@ -1926,7 +1999,7 @@ struct cascadePreselector {
   }
   //*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*
   /// This process function ensures that all cascades are built. It will simply tag everything as true.
-  void processBuildAll(aod::Cascades const& cascades, aod::V0sLinked const&, aod::V0Datas const&, aod::TracksExtra const&)
+  void processBuildAll(aod::Cascades const& cascades, aod::V0s const&, aod::V0Datas const&, aod::TracksExtra const&)
   {
     initializeMasks(cascades.size());
     for (auto& casc : cascades) {
@@ -1936,7 +2009,7 @@ struct cascadePreselector {
       checkAndFinalize();
   }
   //*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*
-  void processBuildMCAssociated(aod::Collisions const& collisions, aod::Cascades const& cascades, aod::V0sLinked const&, aod::V0Datas const& v0table, LabeledTracksExtra const&, aod::McParticles const&)
+  void processBuildMCAssociated(aod::Collisions const& collisions, aod::Cascades const& cascades, aod::V0s const&, aod::V0Datas const& v0table, LabeledTracksExtra const&, aod::McParticles const&)
   {
     initializeMasks(cascades.size());
     for (auto& casc : cascades) {
@@ -1947,7 +2020,7 @@ struct cascadePreselector {
       checkAndFinalize();
   }
   //*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*
-  void processBuildValiddEdx(aod::Collisions const& collisions, aod::Cascades const& cascades, aod::V0sLinked const&, aod::V0Datas const&, TracksExtraWithPID const&)
+  void processBuildValiddEdx(aod::Collisions const& collisions, aod::Cascades const& cascades, aod::V0s const&, aod::V0Datas const&, TracksExtraWithPID const&)
   {
     initializeMasks(cascades.size());
     for (auto& casc : cascades) {
@@ -1958,7 +2031,7 @@ struct cascadePreselector {
       checkAndFinalize();
   }
   //*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*
-  void processBuildValiddEdxMCAssociated(aod::Collisions const& collisions, aod::Cascades const& cascades, aod::V0sLinked const&, aod::V0Datas const&, TracksExtraWithPIDandLabels const&, aod::McParticles const&)
+  void processBuildValiddEdxMCAssociated(aod::Collisions const& collisions, aod::Cascades const& cascades, aod::V0s const&, aod::V0Datas const&, TracksExtraWithPIDandLabels const&, aod::McParticles const&)
   {
     initializeMasks(cascades.size());
     for (auto& casc : cascades) {

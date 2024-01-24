@@ -728,8 +728,8 @@ struct kfStrangenessStudy {
       } else if (charge == +1) {
         posTrackParCov.getPxPyPzGlo(momPionRecIU);
         negTrackParCov.getPxPyPzGlo(momProtonRecIU);
-        posTrackParCov.getCovXYZPxPyPzGlo(cvproton);
-        negTrackParCov.getCovXYZPxPyPzGlo(cvpion);
+        posTrackParCov.getCovXYZPxPyPzGlo(cvpion);
+        negTrackParCov.getCovXYZPxPyPzGlo(cvproton);
         etaProton = negTrack.eta();
         etaPion = posTrack.eta();
         tpcNClsProton = negTrack.tpcNClsFound();

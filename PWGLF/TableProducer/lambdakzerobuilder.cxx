@@ -62,6 +62,7 @@
 #include "DataFormatsParameters/GRPMagField.h"
 #include "CCDB/BasicCCDBManager.h"
 #include "DataFormatsCalibration/MeanVertexObject.h"
+#include "TableHelper.h"
 
 using namespace o2;
 using namespace o2::framework;
@@ -94,6 +95,7 @@ struct lambdakzeroBuilder {
   Produces<aod::StoredV0Cores> v0cores;
   Produces<aod::V0TrackXs> v0trackXs;
   Produces<aod::V0Covs> v0covs;                 // covariances
+  Produces<aod::V0DauCovs> v0daucovs;           // covariances of daughter tracks
   Produces<aod::V0TraPosAtDCAs> v0dauPositions; // auxiliary debug information
 
   Produces<aod::V0fCIndices> v0fcindices;
@@ -105,6 +107,7 @@ struct lambdakzeroBuilder {
 
   // Configurables related to table creation
   Configurable<int> createV0CovMats{"createV0CovMats", -1, {"Produces V0 cov matrices. -1: auto, 0: don't, 1: yes. Default: auto (-1)"}};
+  Configurable<int> createV0DauCovMats{"createV0DauCovMats", -1, {"Produces V0 cov matrices for daughter tracks. -1: auto, 0: don't, 1: yes. Default: auto (-1)"}};
   Configurable<int> createV0PosAtDCAs{"createV0PosAtDCAs", 0, {"Produces V0 track positions at minima. 0: don't, 1: yes. Default: no (0)"}};
 
   Configurable<bool> storePhotonCandidates{"storePhotonCandidates", false, "store photon candidates (yes/no)"};
@@ -193,6 +196,13 @@ struct lambdakzeroBuilder {
   Configurable<float> massWindownumberOfSigmas{"massWindownumberOfSigmas", 5e+6, "number of sigmas around mass peaks to keep"};
   Configurable<bool> massWindowWithTPCPID{"massWindowWithTPCPID", true, "when checking mass windows, correlate with TPC dE/dx"};
   Configurable<float> massWindowSafetyMargin{"massWindowSafetyMargin", 0.001, "Extra mass window safety margin"};
+
+  // apply lifetime cuts to K0Short and Lambda candidates
+  // unit of measurement: centimeters
+  // lifetime of Lambda ~7.9cm but keep in mind feeddown from cascades
+  // lifetime of K0Short ~2.5cm, no feeddown and plenty to cut
+  static constexpr float defaultLifetimeCuts[1][2] = {{1e+6, 1e+6}};
+  Configurable<LabeledArray<float>> lifetimecut{"lifetimecut", {defaultLifetimeCuts[0], 2, {"lifetimecutLambda", "lifetimecutK0S"}}, "lifetimecut"};
 
   int mRunNumber;
   float d_bz;
@@ -491,6 +501,7 @@ struct lambdakzeroBuilder {
             LOGF(info, "Device named %s has subscribed to V0Covs table! Enabling.", device.name);
             createV0CovMats.value = 1;
           }
+          enableFlagIfTableRequired(context, "V0DauCovs", createV0DauCovMats);
         }
       }
       LOGF(info, "Self-configuration finished! Decided on selections:");
@@ -517,6 +528,9 @@ struct lambdakzeroBuilder {
     }
     if (createV0CovMats > 0) {
       LOGF(info, " ---+*> Will produce V0 cov mat table");
+    }
+    if (createV0DauCovMats > 0) {
+      LOGF(info, " ---+*> Will produce V0 cov mat table for decay daughters");
     }
     //*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*+-+*
 
@@ -717,6 +731,8 @@ struct lambdakzeroBuilder {
     auto py = v0candidate.posP[1] + v0candidate.negP[1];
     auto pz = v0candidate.posP[2] + v0candidate.negP[2];
     auto lPt = RecoDecay::sqrtSumOfSquares(v0candidate.posP[0] + v0candidate.negP[0], v0candidate.posP[1] + v0candidate.negP[1]);
+    auto lPtotal = RecoDecay::sqrtSumOfSquares(lPt, v0candidate.posP[2] + v0candidate.negP[2]);
+    auto lLengthTraveled = RecoDecay::sqrtSumOfSquares(v0candidate.pos[0] - primaryVertex.getX(), v0candidate.pos[1] - primaryVertex.getY(), v0candidate.pos[2] - primaryVertex.getZ());
 
     // Momentum range check
     if (lPt < minimumPt || lPt > maximumPt) {
@@ -728,6 +744,11 @@ struct lambdakzeroBuilder {
         TMath::Abs(RecoDecay::eta(std::array{v0candidate.negP[0], v0candidate.negP[1], v0candidate.negP[2]})) > maxDaughterEta) {
       return false; // reject - daughters have too large eta to be reliable for MC corrections
     }
+
+    // calculate proper lifetime
+    // m*L/p for each hypothesis
+    float lML2P_K0Short = o2::constants::physics::MassKaonNeutral * lLengthTraveled / lPtotal;
+    float lML2P_Lambda = o2::constants::physics::MassLambda * lLengthTraveled / lPtotal;
 
     // Passes momentum window check
     statisticsRegistry.v0stats[kWithinMomentumRange]++;
@@ -741,25 +762,40 @@ struct lambdakzeroBuilder {
     auto lAntiHypertritonMass = RecoDecay::m(array{array{v0candidate.posP[0], v0candidate.posP[1], v0candidate.posP[2]}, array{2.0f * v0candidate.negP[0], 2.0f * v0candidate.negP[1], 2.0f * v0candidate.negP[2]}}, array{o2::constants::physics::MassPionCharged, o2::constants::physics::MassHelium3});
 
     // mass window check
-    bool desiredMass = false;
-    if (massWindownumberOfSigmas > 1e+3) {
-      desiredMass = true; // safety fallback
-    } else {
-      // check if user requested to correlate mass requirement with TPC PID
-      // (useful for data volume reduction)
-      bool dEdxK0Short = V0.isdEdxK0Short() || !massWindowWithTPCPID;
-      bool dEdxLambda = V0.isdEdxLambda() || !massWindowWithTPCPID;
-      bool dEdxAntiLambda = V0.isdEdxAntiLambda() || !massWindowWithTPCPID;
+    bool keepCandidate = false;
 
-      if (dEdxK0Short && TMath::Abs(v0candidate.k0ShortMass - o2::constants::physics::MassKaonNeutral) < massWindownumberOfSigmas * getMassSigmaK0Short(lPt) + massWindowSafetyMargin)
-        desiredMass = true;
-      if (dEdxLambda && TMath::Abs(v0candidate.lambdaMass - o2::constants::physics::MassLambda) < massWindownumberOfSigmas * getMassSigmaLambda(lPt) + massWindowSafetyMargin)
-        desiredMass = true;
-      if (dEdxAntiLambda && TMath::Abs(v0candidate.antiLambdaMass - o2::constants::physics::MassLambda) < massWindownumberOfSigmas * getMassSigmaLambda(lPt) + massWindowSafetyMargin)
-        desiredMass = true;
+    bool desiredMassK0Short = false;
+    bool desiredMassLambda = false;
+    bool desiredMassAntiLambda = false;
+
+    if (massWindownumberOfSigmas > 1e+3) {
+      desiredMassK0Short = true;    // safety fallback
+      desiredMassLambda = true;     // safety fallback
+      desiredMassAntiLambda = true; // safety fallback
+    } else {
+      desiredMassK0Short = TMath::Abs(v0candidate.k0ShortMass - o2::constants::physics::MassKaonNeutral) < massWindownumberOfSigmas * getMassSigmaK0Short(lPt) + massWindowSafetyMargin;
+      desiredMassLambda = TMath::Abs(v0candidate.lambdaMass - o2::constants::physics::MassLambda) < massWindownumberOfSigmas * getMassSigmaLambda(lPt) + massWindowSafetyMargin;
+      desiredMassAntiLambda = TMath::Abs(v0candidate.antiLambdaMass - o2::constants::physics::MassLambda) < massWindownumberOfSigmas * getMassSigmaLambda(lPt) + massWindowSafetyMargin;
     }
 
-    if (!desiredMass)
+    // check if user requested to correlate mass requirement with TPC PID
+    // (useful for data volume reduction)
+    bool dEdxK0Short = V0.isdEdxK0Short() || !massWindowWithTPCPID;
+    bool dEdxLambda = V0.isdEdxLambda() || !massWindowWithTPCPID;
+    bool dEdxAntiLambda = V0.isdEdxAntiLambda() || !massWindowWithTPCPID;
+
+    // check proper lifetime if asked for
+    bool passML2P_K0Short = lML2P_K0Short < lifetimecut->get("lifetimecutK0S") || lifetimecut->get("lifetimecutK0S") > 1000;
+    bool passML2P_Lambda = lML2P_Lambda < lifetimecut->get("lifetimecutLambda") || lifetimecut->get("lifetimecutLambda") > 1000;
+
+    if (passML2P_K0Short && dEdxK0Short && desiredMassK0Short)
+      keepCandidate = true;
+    if (passML2P_Lambda && dEdxLambda && desiredMassLambda)
+      keepCandidate = true;
+    if (passML2P_Lambda && dEdxAntiLambda && desiredMassAntiLambda)
+      keepCandidate = true;
+
+    if (!keepCandidate)
       return false;
 
     if (d_doTrackQA) {
@@ -944,7 +980,6 @@ struct lambdakzeroBuilder {
         positionCovariance[3] = covVtxV(2, 0);
         positionCovariance[4] = covVtxV(2, 1);
         positionCovariance[5] = covVtxV(2, 2);
-        // store momentum covariance matrix
         std::array<float, 21> covTpositive = {0.};
         std::array<float, 21> covTnegative = {0.};
         // std::array<float, 6> momentumCovariance;
@@ -959,6 +994,16 @@ struct lambdakzeroBuilder {
           if (V0.v0Type() > 1 && !storePhotonCandidates)
             continue;
           v0covs(positionCovariance, momentumCovariance);
+          if (createV0DauCovMats) {
+            // store momentum covariance matrix
+            float covariancePosTrack[21];
+            float covarianceNegTrack[21];
+            for (int i = 0; i < 21; i++) {
+              covariancePosTrack[i] = covTpositive[i];
+              covarianceNegTrack[i] = covTnegative[i];
+            }
+            v0daucovs(covariancePosTrack, covarianceNegTrack);
+          }
         } else {
           v0fccovs(positionCovariance, momentumCovariance);
         }
@@ -1025,10 +1070,11 @@ struct lambdakzeroPreselector {
   Configurable<int> dTPCNCrossedRows{"dTPCNCrossedRows", 50, "Minimum TPC crossed rows"};
 
   // context-aware selections
-  Configurable<bool> dPreselectOnlyBaryons{"dPreselectOnlyBaryons", false, "apply TPC dE/dx and quality only to baryon daughters"};
+  Configurable<bool> dPreselectOnlyBaryons{"dPreselectOnlyBaryons", false, "apply TPC dE/dx only to baryon daughters"};
 
   // for debugging and further tests
   Configurable<bool> forceITSOnlyMesons{"forceITSOnlyMesons", false, "force meson-like daughters to be ITS-only to pass Lambda/AntiLambda selections (yes/no)"};
+  Configurable<int> minITSCluITSOnly{"minITSCluITSOnly", 0, "minimum number of ITS clusters to ask for if daughter track does not have TPC"};
 
   // for bit-packed maps
   std::vector<uint16_t> selectionMask;
@@ -1075,25 +1121,31 @@ struct lambdakzeroPreselector {
     // check track explicitly for absence of TPC
     bool posITSonly = !lPosTrack.hasTPC();
     bool negITSonly = !lNegTrack.hasTPC();
+    bool longPosITSonly = posITSonly && lPosTrack.itsNCls() >= minITSCluITSOnly;
+    bool longNegITSonly = negITSonly && lNegTrack.itsNCls() >= minITSCluITSOnly;
 
     // No baryons in decay
     if (((bitcheck(maskElement, bitdEdxGamma) || bitcheck(maskElement, bitdEdxK0Short)) || passdEdx) && (posRowsOK && negRowsOK) && (!forceITSOnlyMesons || (posITSonly && negITSonly)))
       bitset(maskElement, bitTrackQuality);
     // With baryons in decay
-    if ((bitcheck(maskElement, bitdEdxLambda) || passdEdx) &&
-        (posRowsOK && (negRowsOK || dPreselectOnlyBaryons)) &&
+    if ((bitcheck(maskElement, bitdEdxLambda) || passdEdx) &&               // logical AND with dEdx
+        (posRowsOK && (negRowsOK || dPreselectOnlyBaryons)) &&              // rows requirement
+        ((posRowsOK || longPosITSonly) && (negRowsOK || longNegITSonly)) && // if ITS-only, check for min length
         (!forceITSOnlyMesons || negITSonly))
       bitset(maskElement, bitTrackQuality);
-    if ((bitcheck(maskElement, bitdEdxAntiLambda) || passdEdx) &&
-        (negRowsOK && (posRowsOK || dPreselectOnlyBaryons)) &&
+    if ((bitcheck(maskElement, bitdEdxAntiLambda) || passdEdx) &&           // logical AND with dEdx
+        (negRowsOK && (posRowsOK || dPreselectOnlyBaryons)) &&              // rows requirement
+        ((posRowsOK || longPosITSonly) && (negRowsOK || longNegITSonly)) && // if ITS-only, check for min length
         (!forceITSOnlyMesons || posITSonly))
       bitset(maskElement, bitTrackQuality);
-    if ((bitcheck(maskElement, bitdEdxHypertriton) || passdEdx) &&
-        (posRowsOK && (negRowsOK || dPreselectOnlyBaryons)) &&
+    if ((bitcheck(maskElement, bitdEdxHypertriton) || passdEdx) &&          // logical AND with dEdx
+        (posRowsOK && (negRowsOK || dPreselectOnlyBaryons)) &&              // rows requirement
+        ((posRowsOK || longPosITSonly) && (negRowsOK || longNegITSonly)) && // if ITS-only, check for min length
         (!forceITSOnlyMesons || negITSonly))
       bitset(maskElement, bitTrackQuality);
-    if ((bitcheck(maskElement, bitdEdxAntiHypertriton) || passdEdx) &&
-        (negRowsOK && (posRowsOK || dPreselectOnlyBaryons)) &&
+    if ((bitcheck(maskElement, bitdEdxAntiHypertriton) || passdEdx) &&      // logical AND with dEdx
+        (negRowsOK && (posRowsOK || dPreselectOnlyBaryons)) &&              // rows requirement
+        ((posRowsOK || longPosITSonly) && (negRowsOK || longNegITSonly)) && // if ITS-only, check for min length
         (!forceITSOnlyMesons || posITSonly))
       bitset(maskElement, bitTrackQuality);
   }

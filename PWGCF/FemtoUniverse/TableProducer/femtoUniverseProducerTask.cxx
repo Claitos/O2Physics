@@ -318,7 +318,7 @@ struct femtoUniverseProducerTask {
            "Please choose one.");
     }
 
-    colCuts.setCuts(ConfEvtZvtx, ConfEvtTriggerCheck, ConfEvtTriggerSel, ConfEvtOfflineCheck, ConfIsRun3);
+    colCuts.setCuts(ConfEvtZvtx, ConfEvtTriggerCheck, ConfEvtTriggerSel, ConfEvtOfflineCheck, ConfIsRun3, ConfCentFT0Min, ConfCentFT0Max);
     colCuts.init(&qaRegistry);
 
     trackCuts.setSelection(ConfTrkCharge, femtoUniverseTrackSelection::kSign, femtoUniverseSelection::kEqual);
@@ -594,7 +594,7 @@ struct femtoUniverseProducerTask {
     // in case of skimming run - don't store such collisions
     // in case of trigger run - store such collisions but don't store any
     // particle candidates for such collisions
-    if (!colCuts.isSelected(col)) {
+    if (!colCuts.isSelectedRun3(col)) {
       if (ConfIsTrigger) {
         outputCollision(vtxZ, cent, multNtr, spher, mMagField); //////
       }
@@ -1158,7 +1158,7 @@ struct femtoUniverseProducerTask {
   PROCESS_SWITCH(femtoUniverseProducerTask, processTrackCentRun2Data, "Provide experimental data for Run 2 with centrality for track track", false);
 
   void
-    processTrackCentRun3Data(soa::Filtered<soa::Join<aod::Collisions, aod::EvSels, aod::CentFT0Cs>>::iterator const& col,
+    processTrackCentRun3Data(aod::FemtoFullCollisionCentRun3 const& col,
                              aod::BCsWithTimestamps const&,
                              aod::FemtoFullTracks const& tracks)
   {

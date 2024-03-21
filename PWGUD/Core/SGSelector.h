@@ -70,7 +70,6 @@ class SGSelector
         gC = false;
       }
     }
-    result.bc = &newbc;
     if (!gA && !gC) {
       result.value = 3;
       return result;
@@ -147,6 +146,7 @@ class SGSelector
       }
     }
     // LOGF(info, "Old BC: %i, New BC: %i",oldbc.globalBC(), newbc.globalBC());
+    result.bc = &newbc;
     result.value = gA && gC ? 2 : (gA ? 0 : 1);
     return result;
   }
@@ -157,6 +157,28 @@ class SGSelector
       return 1;
     else
       return 0;
+  }
+
+  template <typename CC>
+  int trueGap(CC& collision, float fv0_cut, float zdc_cut)
+  {
+    int gap = collision.gapSide();
+    int true_gap = gap;
+    if (gap == 0) {
+      if (collision.totalFV0AmplitudeA() > fv0_cut || collision.energyCommonZNA() > zdc_cut)
+        true_gap = -1;
+    } else if (gap == 1) {
+      if (collision.energyCommonZNC() > zdc_cut)
+        true_gap = -1;
+    } else if (gap == 2) {
+      if ((collision.totalFV0AmplitudeA() > fv0_cut || collision.energyCommonZNA() > zdc_cut) && (collision.energyCommonZNC() > zdc_cut))
+        true_gap = -1;
+      else if (collision.totalFV0AmplitudeA() > fv0_cut || collision.energyCommonZNA() > zdc_cut)
+        true_gap = 1;
+      else if (collision.energyCommonZNC() > zdc_cut)
+        true_gap = 0;
+    }
+    return true_gap;
   }
 
  private:

@@ -172,8 +172,8 @@ struct HfTreeCreatorBsToDsPi {
 
   Filter filterSelectCandidates = aod::hf_sel_candidate_bs::isSelBsToDsPi >= selectionFlagBs;
 
-  Partition<SelectedCandidatesMc> recSig = nabs(aod::hf_cand_bs::flagMcMatchRec) == (int8_t)BIT(aod::hf_cand_bs::DecayTypeMc::BsToDsPiToKKPiPi);
-  Partition<SelectedCandidatesMc> recBg = nabs(aod::hf_cand_bs::flagMcMatchRec) != (int8_t)BIT(aod::hf_cand_bs::DecayTypeMc::BsToDsPiToKKPiPi);
+  Partition<SelectedCandidatesMc> recSig = nabs(aod::hf_cand_bs::flagMcMatchRec) == (int8_t)BIT(aod::hf_cand_bs::DecayTypeMc::BsToDsPiToPhiPiPiToKKPiPi);
+  Partition<SelectedCandidatesMc> recBg = nabs(aod::hf_cand_bs::flagMcMatchRec) != (int8_t)BIT(aod::hf_cand_bs::DecayTypeMc::BsToDsPiToPhiPiPiToKKPiPi);
 
   void init(InitContext const&)
   {
@@ -351,13 +351,13 @@ struct HfTreeCreatorBsToDsPi {
     // Filling particle properties
     rowCandidateFullParticles.reserve(particles.size());
     for (const auto& particle : particles) {
-      if (TESTBIT(std::abs(particle.flagMcMatchGen()), aod::hf_cand_bs::DecayTypeMc::BsToDsPiToKKPiPi)) {
+      if (TESTBIT(std::abs(particle.flagMcMatchGen()), aod::hf_cand_bs::DecayTypeMc::BsToDsPiToPhiPiPiToKKPiPi)) {
         rowCandidateFullParticles(
           particle.mcCollision().bcId(),
           particle.pt(),
           particle.eta(),
           particle.phi(),
-          RecoDecay::y(std::array{particle.px(), particle.py(), particle.pz()}, o2::constants::physics::MassBS),
+          RecoDecay::y(particle.pVector(), o2::constants::physics::MassBS),
           particle.flagMcMatchGen());
       }
     }

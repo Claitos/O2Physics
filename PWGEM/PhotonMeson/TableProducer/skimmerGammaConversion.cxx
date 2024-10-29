@@ -27,6 +27,7 @@
 #include "PWGEM/PhotonMeson/DataModel/gammaTables.h"
 #include "PWGEM/PhotonMeson/Utils/gammaConvDefinitions.h"
 #include "PWGEM/PhotonMeson/Utils/PCMUtilities.h"
+#include "PWGLF/DataModel/LFStrangenessTables.h"
 
 #include "Framework/runDataProcessing.h"
 #include "Framework/AnalysisTask.h"
@@ -180,7 +181,7 @@ struct skimmerGammaConversion {
     v0legs(theTrack.collisionId(),
            theTrack.globalIndex(), theTrack.sign(),
            kfp.GetPx(), kfp.GetPy(), kfp.GetPz(), theTrack.dcaXY(), theTrack.dcaZ(),
-           theTrack.tpcNClsFindable(), theTrack.tpcNClsFindableMinusFound(), theTrack.tpcNClsFindableMinusCrossedRows(),
+           theTrack.tpcNClsFindable(), theTrack.tpcNClsFindableMinusFound(), theTrack.tpcNClsFindableMinusCrossedRows(), theTrack.tpcNClsShared(),
            theTrack.tpcChi2NCl(), theTrack.tpcInnerParam(), theTrack.tpcSignal(),
            theTrack.tpcNSigmaEl(), theTrack.tpcNSigmaPi(),
            theTrack.itsClusterSizes(), theTrack.itsChi2NCl(), theTrack.detectorMap(),
@@ -303,7 +304,7 @@ struct skimmerGammaConversion {
     float sign_tmp = dca_y_v0_to_pv > 0 ? +1 : -1;
     float dca_xy_v0_to_pv = RecoDecay::sqrtSumOfSquares(dca_x_v0_to_pv, dca_y_v0_to_pv) * sign_tmp;
 
-    v0photonskf(collision.globalIndex(), v0legs.lastIndex() + 1, v0legs.lastIndex() + 2,
+    v0photonskf(collision.globalIndex(), v0.globalIndex(), v0legs.lastIndex() + 1, v0legs.lastIndex() + 2,
                 gammaKF_DecayVtx.GetX(), gammaKF_DecayVtx.GetY(), gammaKF_DecayVtx.GetZ(),
                 gammaKF_DecayVtx.GetPx(), gammaKF_DecayVtx.GetPy(), gammaKF_DecayVtx.GetPz(),
                 v0_sv.M(), dca_xy_v0_to_pv, dca_z_v0_to_pv,
@@ -318,9 +319,9 @@ struct skimmerGammaConversion {
   PresliceUnsorted<aod::V0Datas> perCollision = aod::v0data::collisionId;
 
   void processRec(aod::Collisions const& collisions,
-                  aod::BCsWithTimestamps const& bcs,
+                  aod::BCsWithTimestamps const&,
                   aod::V0Datas const& V0s,
-                  tracksAndTPCInfo const& theTracks)
+                  tracksAndTPCInfo const&)
   {
     for (auto& collision : collisions) {
       auto bc = collision.bc_as<aod::BCsWithTimestamps>();
@@ -341,16 +342,16 @@ struct skimmerGammaConversion {
         fillV0KF<tracksAndTPCInfo>(collision, v0);
 
       } // end of v0 loop
-    }   // end of collision loop
+    } // end of collision loop
   }
   PROCESS_SWITCH(skimmerGammaConversion, processRec, "process reconstructed info only", true);
 
   Preslice<aod::McParticles> perMcCollision = aod::mcparticle::mcCollisionId;
   void processMc(soa::Join<aod::McCollisionLabels, aod::Collisions> const& collisions,
                  aod::McCollisions const&,
-                 aod::BCsWithTimestamps const& bcs,
+                 aod::BCsWithTimestamps const&,
                  aod::V0Datas const& theV0s,
-                 tracksAndTPCInfoMC const& theTracks,
+                 tracksAndTPCInfoMC const&,
                  aod::McParticles const& mcTracks)
   {
     for (auto& collision : collisions) {
@@ -394,7 +395,7 @@ struct skimmerGammaConversion {
   PROCESS_SWITCH(skimmerGammaConversion, processMc, "process reconstructed and mc info ", false);
 
   template <typename TV0, typename TTRACK>
-  eV0Confirmation isTrueV0(TV0 const& theV0,
+  eV0Confirmation isTrueV0(TV0 const& /*theV0*/,
                            TTRACK const& theTrackPos,
                            TTRACK const& theTrackNeg)
   {

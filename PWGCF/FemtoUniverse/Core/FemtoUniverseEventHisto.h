@@ -12,7 +12,7 @@
 /// \file FemtoUniverseEventHisto.h
 /// \brief FemtoUniverseEventHisto - Histogram class for tracks, V0s and cascades
 /// \author Andi Mathis, TU München, andreas.mathis@ph.tum.de
-/// \author Zuzanna Chochulska, WUT Warsaw, zuzanna.chochulska.stud@pw.edu.pl
+/// \author Zuzanna Chochulska, WUT Warsaw & CTU Prague, zchochul@cern.ch
 
 #ifndef PWGCF_FEMTOUNIVERSE_CORE_FEMTOUNIVERSEEVENTHISTO_H_
 #define PWGCF_FEMTOUNIVERSE_CORE_FEMTOUNIVERSEEVENTHISTO_H_
@@ -35,9 +35,11 @@ class FemtoUniverseEventHisto
   void init(HistogramRegistry* registry)
   {
     mHistogramRegistry = registry;
-    mHistogramRegistry->add("Event/zvtxhist", "; vtx_{z} (cm); Entries", kTH1F, {{300, -12.5, 12.5}});
-    mHistogramRegistry->add("Event/MultV0M", "; vMultV0M; Entries", kTH1F, {{16384, 0, 32768}});
-    mHistogramRegistry->add("Event/MultNTr", "; vMultNTr; Entries", kTH1F, {{200, 0, 200}});
+    mHistogramRegistry->add("Event/zvtxhist", "; vtx_{z} (cm); Entries", kTH1F, {{250, -12.5, 12.5}});
+    mHistogramRegistry->add("Event/MultV0M", "; vMultV0M; Entries", kTH1F, {{1500, 0, 30000}});
+    mHistogramRegistry->add("Event/MultNTr", "; vMultNTr; Entries", kTH1F, {{20, 0, 200}});
+    mHistogramRegistry->add("Event/MultNTrVSMultV0M", "; vMultNTr; MultV0M", kTH2F, {{200, 0, 4000}, {1500, 0, 30000}});
+    mHistogramRegistry->add("Event/zvtxhist_MultNTr", "; zvtxhist; MultNTr", kTH2F, {{250, -12.5, 12.5}, {20, 0, 200}});
   }
 
   /// Some basic QA of the event
@@ -50,6 +52,8 @@ class FemtoUniverseEventHisto
       mHistogramRegistry->fill(HIST("Event/zvtxhist"), col.posZ());
       mHistogramRegistry->fill(HIST("Event/MultV0M"), col.multV0M());
       mHistogramRegistry->fill(HIST("Event/MultNTr"), col.multNtr());
+      mHistogramRegistry->fill(HIST("Event/MultNTrVSMultV0M"), col.multNtr(), col.multV0M());
+      mHistogramRegistry->fill(HIST("Event/zvtxhist_MultNTr"), col.posZ(), col.multNtr());
     }
   }
 

@@ -23,12 +23,14 @@
 #include "Common/Core/TrackSelection.h"
 #include "Common/Core/TrackSelectionDefaults.h"
 #include "Common/DataModel/EventSelection.h"
+#include "Common/CCDB/EventSelectionParams.h"
 #include "Common/DataModel/TrackSelectionTables.h"
 
 #include "PWGJE/Core/JetFinder.h"
 #include "PWGJE/Core/JetFindingUtilities.h"
 #include "PWGJE/DataModel/Jet.h"
 #include "PWGJE/DataModel/JetSubstructure.h"
+#include "PWGJE/Core/JetDerivedDataUtilities.h"
 
 using namespace o2;
 using namespace o2::framework;
@@ -80,27 +82,36 @@ struct JetSubstructureOutputTask {
   }
 
   template <typename T, typename U, typename V>
-  void fillTables(T const& jet, int32_t collisionIndex, U& jetOutputTable, V& jetSubstructureOutputTable, std::map<int32_t, int32_t>& jetMapping)
+  void fillJetTables(T const& jet, int32_t collisionIndex, U& jetOutputTable, V& jetSubstructureOutputTable, std::map<int32_t, int32_t>& jetMapping)
   {
     std::vector<float> energyMotherVec;
     std::vector<float> ptLeadingVec;
     std::vector<float> ptSubLeadingVec;
     std::vector<float> thetaVec;
+    std::vector<float> pairPtVec;
+    std::vector<float> pairEnergyVec;
+    std::vector<float> pairThetaVec;
     auto energyMotherSpan = jet.energyMother();
     auto ptLeadingSpan = jet.ptLeading();
     auto ptSubLeadingSpan = jet.ptSubLeading();
     auto thetaSpan = jet.theta();
+    auto pairPtSpan = jet.pairPt();
+    auto pairEnergySpan = jet.pairEnergy();
+    auto pairThetaSpan = jet.pairTheta();
     std::copy(energyMotherSpan.begin(), energyMotherSpan.end(), std::back_inserter(energyMotherVec));
     std::copy(ptLeadingSpan.begin(), ptLeadingSpan.end(), std::back_inserter(ptLeadingVec));
     std::copy(ptSubLeadingSpan.begin(), ptSubLeadingSpan.end(), std::back_inserter(ptSubLeadingVec));
     std::copy(thetaSpan.begin(), thetaSpan.end(), std::back_inserter(thetaVec));
-    jetOutputTable(collisionIndex, collisionIndex, jet.pt(), jet.phi(), jet.eta(), jet.r(), jet.tracksIds().size()); // second collision index is a dummy coloumn mirroring the hf candidate
-    jetSubstructureOutputTable(jetOutputTable.lastIndex(), energyMotherVec, ptLeadingVec, ptSubLeadingVec, thetaVec);
+    std::copy(pairPtSpan.begin(), pairPtSpan.end(), std::back_inserter(pairPtVec));
+    std::copy(pairEnergySpan.begin(), pairEnergySpan.end(), std::back_inserter(pairEnergyVec));
+    std::copy(pairThetaSpan.begin(), pairThetaSpan.end(), std::back_inserter(pairThetaVec));
+    jetOutputTable(collisionIndex, collisionIndex, jet.pt(), jet.phi(), jet.eta(), jet.y(), jet.r(), jet.tracksIds().size()); // second collision index is a dummy coloumn mirroring the hf candidate
+    jetSubstructureOutputTable(jetOutputTable.lastIndex(), energyMotherVec, ptLeadingVec, ptSubLeadingVec, thetaVec, jet.nSub2DR(), jet.nSub1(), jet.nSub2(), pairPtVec, pairEnergyVec, pairThetaVec, jet.angularity());
     jetMapping.insert(std::make_pair(jet.globalIndex(), jetOutputTable.lastIndex()));
   }
 
   template <bool isMc, typename T, typename U, typename V, typename M, typename N>
-  void analyseCharged(T const& collision, U const& jets, V& collisionOutputTable, M& jetOutputTable, N& jetSubstructureOutputTable, std::map<int32_t, int32_t>& jetMapping, float jetPtMin)
+  void analyseCharged(T const& collision, U const& jets, V& collisionOutputTable, M& jetOutputTable, N& jetSubstructureOutputTable, std::map<int32_t, int32_t>& jetMapping, float jetPtMin, float eventWeight)
   {
     int nJetInCollision = 0;
     int32_t collisionIndex = -1;
@@ -115,19 +126,19 @@ struct JetSubstructureOutputTask {
         if (jet.r() == round(jetRadiiValue * 100.0f)) {
           if constexpr (!isMc) {
             if (nJetInCollision == 0) {
-              collisionOutputTable(collision.posZ(), collision.centrality(), collision.eventSel());
+              collisionOutputTable(collision.posZ(), collision.centrality(), collision.eventSel(), eventWeight);
               collisionIndex = collisionOutputTable.lastIndex();
             }
             nJetInCollision++;
           }
-          fillTables(jet, collisionIndex, jetOutputTable, jetSubstructureOutputTable, jetMapping);
+          fillJetTables(jet, collisionIndex, jetOutputTable, jetSubstructureOutputTable, jetMapping);
         }
       }
     }
   }
 
   template <typename T, typename U, typename V>
-  void analyseMatched(T const& jets, U const& jetsTag, std::map<int32_t, int32_t>& jetMapping, std::map<int32_t, int32_t>& jetTagMapping, V& matchingOutputTable, float jetPtMin)
+  void analyseMatched(T const& jets, U const& /*jetsTag*/, std::map<int32_t, int32_t>& jetMapping, std::map<int32_t, int32_t>& jetTagMapping, V& matchingOutputTable, float jetPtMin)
   {
     std::vector<int> candMatching;
     for (const auto& jet : jets) {
@@ -168,7 +179,7 @@ struct JetSubstructureOutputTask {
     }
   }
 
-  void processClearMaps(JetCollisions const& collisions)
+  void processClearMaps(aod::JetCollisions const&)
   {
     jetMappingData.clear();
     jetMappingDataSub.clear();
@@ -177,17 +188,17 @@ struct JetSubstructureOutputTask {
   }
   PROCESS_SWITCH(JetSubstructureOutputTask, processClearMaps, "process function that clears all the maps in each dataframe", true);
 
-  void processOutputData(JetCollision const& collision,
+  void processOutputData(aod::JetCollision const& collision,
                          soa::Join<aod::ChargedJets, aod::ChargedJetConstituents, aod::CJetSSs> const& jets)
   {
-    analyseCharged<false>(collision, jets, collisionOutputTableData, jetOutputTableData, jetSubstructureOutputTableData, jetMappingData, jetPtMinData);
+    analyseCharged<false>(collision, jets, collisionOutputTableData, jetOutputTableData, jetSubstructureOutputTableData, jetMappingData, jetPtMinData, 1.0);
   }
   PROCESS_SWITCH(JetSubstructureOutputTask, processOutputData, "jet substructure output Data", false);
 
-  void processOutputDataSub(JetCollision const& collision,
+  void processOutputDataSub(aod::JetCollision const& collision,
                             soa::Join<aod::ChargedEventWiseSubtractedJets, aod::ChargedEventWiseSubtractedJetConstituents, aod::CEWSJetSSs> const& jets)
   {
-    analyseCharged<false>(collision, jets, collisionOutputTableDataSub, jetOutputTableDataSub, jetSubstructureOutputTableDataSub, jetMappingDataSub, jetPtMinDataSub);
+    analyseCharged<false>(collision, jets, collisionOutputTableDataSub, jetOutputTableDataSub, jetSubstructureOutputTableDataSub, jetMappingDataSub, jetPtMinDataSub, 1.0);
   }
   PROCESS_SWITCH(JetSubstructureOutputTask, processOutputDataSub, "jet substructure output event-wise subtracted Data", false);
 
@@ -199,17 +210,17 @@ struct JetSubstructureOutputTask {
   }
   PROCESS_SWITCH(JetSubstructureOutputTask, processOutputMatchingData, "jet matching output Data", false);
 
-  void processOutputMCD(JetCollision const& collision,
+  void processOutputMCD(aod::JetCollisionMCD const& collision, aod::JetMcCollisions const&,
                         soa::Join<aod::ChargedMCDetectorLevelJets, aod::ChargedMCDetectorLevelJetConstituents, aod::CMCDJetSSs> const& jets)
   {
-    analyseCharged<false>(collision, jets, collisionOutputTableMCD, jetOutputTableMCD, jetSubstructureOutputTableMCD, jetMappingMCD, jetPtMinMCD);
+    analyseCharged<false>(collision, jets, collisionOutputTableMCD, jetOutputTableMCD, jetSubstructureOutputTableMCD, jetMappingMCD, jetPtMinMCD, collision.mcCollision().weight());
   }
   PROCESS_SWITCH(JetSubstructureOutputTask, processOutputMCD, "jet substructure output MCD", false);
 
-  void processOutputMCP(JetMcCollision const& collision,
+  void processOutputMCP(aod::JetMcCollision const& collision,
                         soa::Join<aod::ChargedMCParticleLevelJets, aod::ChargedMCParticleLevelJetConstituents, aod::CMCPJetSSs> const& jets)
   {
-    analyseCharged<true>(collision, jets, collisionOutputTableMCP, jetOutputTableMCP, jetSubstructureOutputTableMCP, jetMappingMCP, jetPtMinMCP);
+    analyseCharged<true>(collision, jets, collisionOutputTableMCP, jetOutputTableMCP, jetSubstructureOutputTableMCP, jetMappingMCP, jetPtMinMCP, collision.weight());
   }
   PROCESS_SWITCH(JetSubstructureOutputTask, processOutputMCP, "jet substructure output MCP", false);
 

@@ -215,7 +215,7 @@ struct TrackMatchingMonitor {
   Filter clusterDefinitionSelection = (o2::aod::emcalcluster::definition == mClusterDefinition) && (o2::aod::emcalcluster::time >= minTime) && (o2::aod::emcalcluster::time <= maxTime) && (o2::aod::emcalcluster::m02 > minM02) && (o2::aod::emcalcluster::m02 < maxM02);
 
   /// \brief Process EMCAL clusters that are matched to a collisions
-  void processCollisions(collisionEvSelIt const& theCollision, selectedClusters const& clusters, o2::aod::EMCALClusterCells const& emccluscells, o2::aod::Calos const& allcalos, o2::aod::EMCALMatchedTracks const& matchedtracks, tracksPID const& alltracks)
+  void processCollisions(collisionEvSelIt const& theCollision, selectedClusters const& clusters, o2::aod::EMCALClusterCells const&, o2::aod::Calos const&, o2::aod::EMCALMatchedTracks const& matchedtracks, tracksPID const& alltracks)
   {
     mHistManager.fill(HIST("eventsAll"), 1);
 
@@ -349,7 +349,6 @@ struct TrackMatchingMonitor {
         mHistManager.fill(HIST("clusterTM_EoverP_E"), eOverP, cluster.energy(), t);
         mHistManager.fill(HIST("clusterTM_dEtadPhi"), dEta, dPhi, t);
         mHistManager.fill(HIST("clusterEMatched"), cluster.energy(), t);
-        mHistManager.fill(HIST("clusterTM_dEtaPt"), dEta, pT, t);
         mHistManager.fill(HIST("clusterTM_EvsP"), cluster.energy(), abs_p, t);
         mHistManager.fill(HIST("clusterTM_EoverP_Pt"), eOverP, match.track_as<tracksPID>().pt(), t);
         mHistManager.fill(HIST("clusterTM_NSigma"), NSigmaEl, match.track_as<tracksPID>().pt(), t);

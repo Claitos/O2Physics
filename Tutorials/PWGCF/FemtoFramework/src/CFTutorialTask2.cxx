@@ -85,14 +85,14 @@ struct CFTutorialTask2 {
   }
 
   // process same event
-  void process(FilteredFDCollision const& col, FilteredFDParts const& parts)
+  void process(FilteredFDCollision const& col, FilteredFDParts const& /*parts*/)
   {
 
     /// event QA
     HistRegistry.fill(HIST("Event/hZvtx"), col.posZ());
 
     // TODO
-    // generate partition of particles 1&2 with sliceByCached method
+    // generate partition of particles 1 & 2 with sliceByCached method
 
     /// TODO:
     /// loop over particle group 1

@@ -132,24 +132,31 @@ struct DGFilterRun3 {
   // using MFs = aod::MFTTracks;
   using FWs = aod::FwdTracks;
 
+  // filter for global tracks
+  Filter globalTrackFilter = requireGlobalTrackInFilter();
+  using globalTracks = soa::Filtered<TCs>;
+
   void process(CC const& collision,
                BCs const& bcs,
                TCs& tracks,
                // MFs& mfttracks,
                FWs& fwdtracks,
-               aod::Zdcs& zdcs,
-               aod::FT0s& ft0s,
-               aod::FV0As& fv0as,
-               aod::FDDs& fdds)
+               globalTracks& goodTracks,
+               aod::Zdcs& /*zdcs*/,
+               aod::FT0s& /*ft0s*/,
+               aod::FV0As& /*fv0as*/,
+               aod::FDDs& /*fdds*/)
   {
     // initialize
     LOGF(debug, "<DGFilterRun3. Collision %d", collision.globalIndex());
-    bool ccs{false};
+    bool isDG{false};
+    bool isDGSmall{false};
+    bool isDGLarge{false};
     registry.fill(HIST("stat/aftercuts"), 0.);
 
     // reject events at TF boundaries
     if (!collision.selection_bit(aod::evsel::kNoTimeFrameBorder)) {
-      filterTable(ccs);
+      filterTable(isDGSmall, isDGLarge);
       return;
     }
     registry.fill(HIST("stat/aftercuts"), 1.);
@@ -160,13 +167,22 @@ struct DGFilterRun3 {
 
     // apply DG selection
     auto isDGEvent = dgSelector.IsSelected(diffCuts, collision, bcRange, tracks, fwdtracks);
+    LOGF(debug, "isDGEvent %d", isDGEvent);
 
     // update after cut histogram
     registry.fill(HIST("stat/aftercuts"), isDGEvent + 2);
 
     // update filterTable
-    ccs = (isDGEvent == 0);
-    filterTable(ccs);
+    if (isDGEvent == 0) {
+      isDG = true;
+      // distinguish between small (numContrib<4) and large events (numContrib>=4)
+      if (collision.numContrib() < 4) {
+        isDGSmall = true;
+      } else {
+        isDGLarge = true;
+      }
+    }
+    filterTable(isDGSmall, isDGLarge);
 
     // log output to check consistency of selections on original and skimmed data
     auto bc2 = collision.foundBC_as<BCs>();
@@ -190,7 +206,7 @@ struct DGFilterRun3 {
       registry.fill(HIST("FIT/FDDCtime"), bc2.foundFDD().timeC());
     }
 
-    auto FITlims = std::vector<float>(5, 1000000.);
+    auto FITlims = std::vector<float>(5, -1.);
     bool isDGcandidate = true;
     for (int nMinBC = 0; nMinBC <= 20; nMinBC++) {
       auto bcSlice = udhelpers::compatibleBCs(collision, 0, bcs, nMinBC);
@@ -216,14 +232,15 @@ struct DGFilterRun3 {
     // collisions
     registry.fill(HIST("collisions/tracksAll"), tracks.size());
     registry.fill(HIST("collisions/PVTracksAll"), collision.numContrib());
-    Partition<TCs> goodTracks = requireGlobalTrackInFilter();
-    goodTracks.bindTable(tracks);
+    // Partition<TCs> goodTracks = requireGlobalTrackInFilter();
+    // goodTracks.bindTable(tracks);
+    // LOGF(info, "# good tracks %d", goodTracks.size());
     registry.get<TH1>(HIST("collisions/globalTracksAll"))->Fill(goodTracks.size());
     auto netCharge = udhelpers::netCharge<true>(tracks);
     registry.fill(HIST("collisions/netChargeAll"), collision.numContrib(), netCharge);
     registry.fill(HIST("collisions/dtcvsrPVtrwTOFAll"), collision.collisionTimeRes(), rgtrwTOF);
     registry.fill(HIST("collisions/rPVtrwTOFAll"), collision.numContrib(), rgtrwTOF);
-    if (ccs) {
+    if (isDG) {
       registry.fill(HIST("collisions/tracksDG"), tracks.size());
       registry.fill(HIST("collisions/PVTracksDG"), collision.numContrib());
       registry.get<TH1>(HIST("collisions/globalTracksDG"))->Fill(goodTracks.size());
@@ -236,7 +253,7 @@ struct DGFilterRun3 {
     for (auto const& track : tracks) {
       if (track.isPVContributor()) {
         registry.fill(HIST("tracks/etavsptAll"), track.eta(), track.pt());
-        if (ccs) {
+        if (isDG) {
           if (track.hasTOF()) {
             registry.fill(HIST("tracks/etavsptDGwT"), track.eta(), track.pt());
           } else {
@@ -254,7 +271,7 @@ struct DGFilterRun3 {
     }
     for (auto ii = 0; ii < 5; ii++) {
       registry.fill(HIST("collisions/forwardTracksAll"), ii, nforwardTracks[ii]);
-      if (ccs) {
+      if (isDG) {
         registry.fill(HIST("collisions/forwardTracksDG"), ii, nforwardTracks[ii]);
       }
     }

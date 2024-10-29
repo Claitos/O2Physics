@@ -44,12 +44,23 @@ const char* selectionLabels[kNsel] = {
   "kNoV0C012vsTklBG",
   "kNoInconsistentVtx",
   "kNoPileupInMultBins",
-  "kNoPilupMV",
+  "kNoPileupMV",
   "kNoPileupTPC",
   "kIsTriggerTVX",
   "kIsINT1",
   "kNoITSROFrameBorder",
-  "kNoTimeFrameBorder"};
+  "kNoTimeFrameBorder",
+  "kNoSameBunchPileup",
+  "kIsGoodZvtxFT0vsPV",
+  "kIsVertexITSTPC",
+  "kIsVertexTOFmatched",
+  "kIsVertexTRDmatched",
+  "kNoCollInTimeRangeNarrow",
+  "kNoCollInTimeRangeStrict",
+  "kNoCollInTimeRangeStandard",
+  "kNoCollInTimeRangeVzDependent",
+  "kNoCollInRofStrict",
+  "kNoCollInRofStandard"};
 } // namespace o2::aod::evsel
 
 using namespace o2::aod::evsel;

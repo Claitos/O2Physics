@@ -50,10 +50,10 @@ using FemtoFullCollisionMC = soa::Join<aod::Collisions, aod::EvSels, aod::Mults,
 using FemtoFullCollision_noCent_MC = soa::Join<aod::Collisions, aod::EvSels, aod::Mults, aod::McCollisionLabels>::iterator;
 
 using FemtoFullTracks = soa::Join<aod::FullTracks, aod::TracksDCA,
-                                  aod::pidTPCFullEl, aod::pidTPCFullMu, aod::pidTPCFullPi,
-                                  aod::pidTPCFullKa, aod::pidTPCFullPr, aod::pidTPCFullDe,
-                                  aod::pidTOFFullEl, aod::pidTOFFullMu, aod::pidTOFFullPi,
-                                  aod::pidTOFFullKa, aod::pidTOFFullPr, aod::pidTOFFullDe>;
+                                  aod::pidTPCFullEl, aod::pidTPCFullMu, aod::pidTPCFullPi, aod::pidTPCFullKa,
+                                  aod::pidTPCFullPr, aod::pidTPCFullDe, aod::pidTPCFullTr, aod::pidTPCFullHe,
+                                  aod::pidTOFFullEl, aod::pidTOFFullMu, aod::pidTOFFullPi, aod::pidTOFFullKa,
+                                  aod::pidTOFFullPr, aod::pidTOFFullDe, aod::pidTOFFullTr, aod::pidTOFFullHe>;
 } // namespace o2::aod
 
 struct femtoDreamProducerReducedTask {
@@ -76,6 +76,7 @@ struct femtoDreamProducerReducedTask {
   Configurable<bool> ConfEvtTriggerCheck{"ConfEvtTriggerCheck", true, "Evt sel: check for trigger"};
   Configurable<int> ConfEvtTriggerSel{"ConfEvtTriggerSel", kINT7, "Evt sel: trigger"};
   Configurable<bool> ConfEvtOfflineCheck{"ConfEvtOfflineCheck", false, "Evt sel: check for offline selection"};
+  Configurable<bool> ConfEvtAddOfflineCheck{"ConfEvtAddOfflineCheck", false, "Evt sel: additional checks for offline selection (not part of sel8 yet)"};
 
   Configurable<bool> ConfTrkRejectNotPropagated{"ConfTrkRejectNotPropagated", false, "True: reject not propagated tracks"};
 
@@ -113,7 +114,7 @@ struct femtoDreamProducerReducedTask {
     int CutBits = 8 * sizeof(o2::aod::femtodreamparticle::cutContainerType);
     Registry.add("AnalysisQA/CutCounter", "; Bit; Counter", kTH1F, {{CutBits + 1, -0.5, CutBits + 0.5}});
 
-    colCuts.setCuts(ConfEvtZvtx.value, ConfEvtTriggerCheck.value, ConfEvtTriggerSel.value, ConfEvtOfflineCheck.value, ConfIsRun3.value);
+    colCuts.setCuts(ConfEvtZvtx.value, ConfEvtTriggerCheck.value, ConfEvtTriggerSel.value, ConfEvtOfflineCheck.value, ConfEvtAddOfflineCheck.value, ConfIsRun3.value);
     colCuts.init(&qaRegistry);
 
     trackCuts.setSelection(ConfTrkCharge, femtoDreamTrackSelection::kSign, femtoDreamSelection::kEqual);
@@ -297,11 +298,15 @@ struct femtoDreamProducerReducedTask {
                          track.tpcNSigmaKa(),
                          track.tpcNSigmaPr(),
                          track.tpcNSigmaDe(),
+                         track.tpcNSigmaTr(),
+                         track.tpcNSigmaHe(),
                          track.tofNSigmaEl(),
                          track.tofNSigmaPi(),
                          track.tofNSigmaKa(),
                          track.tofNSigmaPr(),
                          track.tofNSigmaDe(),
+                         track.tofNSigmaTr(),
+                         track.tofNSigmaHe(),
                          -999., -999., -999., -999., -999., -999.);
       }
     }
@@ -320,7 +325,7 @@ struct femtoDreamProducerReducedTask {
   void processMC(aod::FemtoFullCollisionMC const& col,
                  aod::BCsWithTimestamps const&,
                  soa::Join<aod::FemtoFullTracks, aod::McTrackLabels> const& tracks,
-                 aod::McCollisions const& mcCollisions, aod::McParticles const& mcParticles)
+                 aod::McCollisions const&, aod::McParticles const&)
   {
     // get magnetic field for run
     getMagneticFieldTesla(col.bc_as<aod::BCsWithTimestamps>());
@@ -332,7 +337,7 @@ struct femtoDreamProducerReducedTask {
   void processMC_noCentrality(aod::FemtoFullCollision_noCent_MC const& col,
                               aod::BCsWithTimestamps const&,
                               soa::Join<aod::FemtoFullTracks, aod::McTrackLabels> const& tracks,
-                              aod::McCollisions const& mcCollisions, aod::McParticles const& mcParticles)
+                              aod::McCollisions const&, aod::McParticles const&)
   {
     // get magnetic field for run
     getMagneticFieldTesla(col.bc_as<aod::BCsWithTimestamps>());

@@ -26,6 +26,7 @@
 #include "PWGHF/Core/HfMlResponseD0ToKPi.h"
 #include "PWGHF/DataModel/CandidateReconstructionTables.h"
 #include "PWGHF/DataModel/CandidateSelectionTables.h"
+#include "PWGHF/Utils/utilsAnalysis.h"
 
 using namespace o2;
 using namespace o2::analysis;
@@ -38,11 +39,13 @@ struct HfCandidateSelectorD0 {
 
   Configurable<double> ptCandMin{"ptCandMin", 0., "Lower bound of candidate pT"};
   Configurable<double> ptCandMax{"ptCandMax", 50., "Upper bound of candidate pT"};
+  Configurable<bool> usePid{"usePid", true, "Use PID selection"};
   // TPC PID
   Configurable<double> ptPidTpcMin{"ptPidTpcMin", 0.15, "Lower bound of track pT for TPC PID"};
   Configurable<double> ptPidTpcMax{"ptPidTpcMax", 5., "Upper bound of track pT for TPC PID"};
   Configurable<double> nSigmaTpcMax{"nSigmaTpcMax", 3., "Nsigma cut on TPC only"};
   Configurable<double> nSigmaTpcCombinedMax{"nSigmaTpcCombinedMax", 5., "Nsigma cut on TPC combined with TOF"};
+  Configurable<bool> usePidTpcOnly{"usePidTpcOnly", false, "Only use TPC PID"};
   // TOF PID
   Configurable<double> ptPidTofMin{"ptPidTofMin", 0.15, "Lower bound of track pT for TOF PID"};
   Configurable<double> ptPidTofMax{"ptPidTofMax", 5., "Upper bound of track pT for TOF PID"};
@@ -70,6 +73,8 @@ struct HfCandidateSelectorD0 {
   Configurable<std::vector<std::string>> onnxFileNames{"onnxFileNames", std::vector<std::string>{"ModelHandler_onnx_D0ToKPi.onnx"}, "ONNX file names for each pT bin (if not from CCDB full path)"};
   Configurable<int64_t> timestampCCDB{"timestampCCDB", -1, "timestamp of the ONNX file for ML model used to query in CCDB"};
   Configurable<bool> loadModelsFromCCDB{"loadModelsFromCCDB", false, "Flag to enable or disable the loading of models from CCDB"};
+  // Mass Cut for trigger analysis
+  Configurable<bool> useTriggerMassCut{"useTriggerMassCut", false, "Flag to enable parametrize pT differential mass cut for triggered data"};
 
   o2::analysis::HfMlResponseD0ToKPi<float> hfMlResponse;
   std::vector<float> outputMlD0 = {};
@@ -78,6 +83,7 @@ struct HfCandidateSelectorD0 {
   TrackSelectorPi selectorPion;
   TrackSelectorKa selectorKaon;
   HfHelper hfHelper;
+  HfTrigger2ProngCuts hfTriggerCuts;
 
   using TracksSel = soa::Join<aod::TracksWDcaExtra, aod::TracksPidPi, aod::PidTpcTofFullPi, aod::TracksPidKa, aod::PidTpcTofFullKa>;
 
@@ -87,7 +93,7 @@ struct HfCandidateSelectorD0 {
   AxisSpec axisSelStatus{2, -0.5f, 1.5f};
   HistogramRegistry registry{"registry"};
 
-  void init(InitContext& initContext)
+  void init(InitContext&)
   {
     std::array<bool, 2> doprocess{doprocessWithDCAFitterN, doprocessWithKFParticle};
     if ((std::accumulate(doprocess.begin(), doprocess.end(), 0)) != 1) {
@@ -156,7 +162,9 @@ struct HfCandidateSelectorD0 {
       return false;
     }
     // candidate DCA
-    // if (candidate.chi2PCA() > cuts[pTBin][1]) return false;
+    if (std::abs(candidate.impactParameterXY()) > cuts->get(pTBin, "DCA")) {
+      return false;
+    }
 
     // candidate topological chi2 over ndf when using KFParticle, need to add this selection to the SelectorCuts.h
     // if constexpr (reconstructionType == aod::hf_cand::VertexerType::KfParticle) {
@@ -207,8 +215,14 @@ struct HfCandidateSelectorD0 {
       if (std::abs(massD0 - o2::constants::physics::MassD0) > cuts->get(pTBin, "m")) {
         return false;
       }
+      if (useTriggerMassCut && !isCandidateInMassRange(massD0, o2::constants::physics::MassD0, candidate.pt(), hfTriggerCuts)) {
+        return false;
+      }
     } else {
       if (std::abs(massD0bar - o2::constants::physics::MassD0) > cuts->get(pTBin, "m")) {
+        return false;
+      }
+      if (useTriggerMassCut && !isCandidateInMassRange(massD0bar, o2::constants::physics::MassD0, candidate.pt(), hfTriggerCuts)) {
         return false;
       }
     }
@@ -307,60 +321,86 @@ struct HfCandidateSelectorD0 {
       }
       statusCand = 1;
 
-      // track-level PID selection
-      int pidTrackPosKaon = -1;
-      int pidTrackPosPion = -1;
-      int pidTrackNegKaon = -1;
-      int pidTrackNegPion = -1;
+      if (usePid) {
+        // track-level PID selection
+        int pidTrackPosKaon = -1;
+        int pidTrackPosPion = -1;
+        int pidTrackNegKaon = -1;
+        int pidTrackNegPion = -1;
 
-      if (usePidTpcAndTof) {
-        pidTrackPosKaon = selectorKaon.statusTpcAndTof(trackPos);
-        pidTrackPosPion = selectorPion.statusTpcAndTof(trackPos);
-        pidTrackNegKaon = selectorKaon.statusTpcAndTof(trackNeg);
-        pidTrackNegPion = selectorPion.statusTpcAndTof(trackNeg);
-      } else {
-        pidTrackPosKaon = selectorKaon.statusTpcOrTof(trackPos);
-        pidTrackPosPion = selectorPion.statusTpcOrTof(trackPos);
-        pidTrackNegKaon = selectorKaon.statusTpcOrTof(trackNeg);
-        pidTrackNegPion = selectorPion.statusTpcOrTof(trackNeg);
-      }
-
-      // int pidBayesTrackPos1Pion = selectorPion.statusBayes(trackPos);
-
-      int pidD0 = -1;
-      int pidD0bar = -1;
-
-      if (pidTrackPosPion == TrackSelectorPID::Accepted &&
-          pidTrackNegKaon == TrackSelectorPID::Accepted) {
-        pidD0 = 1; // accept D0
-      } else if (pidTrackPosPion == TrackSelectorPID::Rejected ||
-                 pidTrackNegKaon == TrackSelectorPID::Rejected) {
-        pidD0 = 0; // exclude D0
-      }
-
-      if (pidTrackNegPion == TrackSelectorPID::Accepted &&
-          pidTrackPosKaon == TrackSelectorPID::Accepted) {
-        pidD0bar = 1; // accept D0bar
-      } else if (pidTrackNegPion == TrackSelectorPID::Rejected ||
-                 pidTrackPosKaon == TrackSelectorPID::Rejected) {
-        pidD0bar = 0; // exclude D0bar
-      }
-
-      if (pidD0 == 0 && pidD0bar == 0) {
-        hfSelD0Candidate(statusD0, statusD0bar, statusHFFlag, statusTopol, statusCand, statusPID);
-        if (applyMl) {
-          hfMlD0Candidate(outputMlD0, outputMlD0bar);
+        if (usePidTpcOnly) {
+          /// kaon TPC PID positive daughter
+          pidTrackPosKaon = selectorKaon.statusTpc(trackPos, candidate.nSigTpcKa0());
+          /// pion TPC PID positive daughter
+          pidTrackPosPion = selectorPion.statusTpc(trackPos, candidate.nSigTpcPi0());
+          /// kaon TPC PID negative daughter
+          pidTrackNegKaon = selectorKaon.statusTpc(trackNeg, candidate.nSigTpcKa1());
+          /// pion TPC PID negative daughter
+          pidTrackNegPion = selectorPion.statusTpc(trackNeg, candidate.nSigTpcPi1());
+        } else if (usePidTpcAndTof) {
+          /// kaon TPC, TOF PID positive daughter
+          pidTrackPosKaon = selectorKaon.statusTpcAndTof(trackPos, candidate.nSigTpcKa0(), candidate.nSigTofKa0());
+          /// pion TPC, TOF PID positive daughter
+          pidTrackPosPion = selectorPion.statusTpcAndTof(trackPos, candidate.nSigTpcPi0(), candidate.nSigTofPi0());
+          /// kaon TPC, TOF PID negative daughter
+          pidTrackNegKaon = selectorKaon.statusTpcAndTof(trackNeg, candidate.nSigTpcKa1(), candidate.nSigTofKa1());
+          /// pion TPC, TOF PID negative daughter
+          pidTrackNegPion = selectorPion.statusTpcAndTof(trackNeg, candidate.nSigTpcPi1(), candidate.nSigTofPi1());
+        } else {
+          /// kaon TPC, TOF PID positive daughter
+          pidTrackPosKaon = selectorKaon.statusTpcOrTof(trackPos, candidate.nSigTpcKa0(), candidate.nSigTofKa0());
+          /// pion TPC, TOF PID positive daughter
+          pidTrackPosPion = selectorPion.statusTpcOrTof(trackPos, candidate.nSigTpcPi0(), candidate.nSigTofPi0());
+          /// kaon TPC, TOF PID negative daughter
+          pidTrackNegKaon = selectorKaon.statusTpcOrTof(trackNeg, candidate.nSigTpcKa1(), candidate.nSigTofKa1());
+          /// pion TPC, TOF PID negative daughter
+          pidTrackNegPion = selectorPion.statusTpcOrTof(trackNeg, candidate.nSigTpcPi1(), candidate.nSigTofPi1());
         }
-        continue;
-      }
 
-      if ((pidD0 == -1 || pidD0 == 1) && topolD0) {
-        statusD0 = 1; // identified as D0
+        // int pidBayesTrackPos1Pion = selectorPion.statusBayes(trackPos);
+
+        int pidD0 = -1;
+        int pidD0bar = -1;
+
+        if (pidTrackPosPion == TrackSelectorPID::Accepted &&
+            pidTrackNegKaon == TrackSelectorPID::Accepted) {
+          pidD0 = 1; // accept D0
+        } else if (pidTrackPosPion == TrackSelectorPID::Rejected ||
+                   pidTrackNegKaon == TrackSelectorPID::Rejected) {
+          pidD0 = 0; // exclude D0
+        }
+
+        if (pidTrackNegPion == TrackSelectorPID::Accepted &&
+            pidTrackPosKaon == TrackSelectorPID::Accepted) {
+          pidD0bar = 1; // accept D0bar
+        } else if (pidTrackNegPion == TrackSelectorPID::Rejected ||
+                   pidTrackPosKaon == TrackSelectorPID::Rejected) {
+          pidD0bar = 0; // exclude D0bar
+        }
+
+        if (pidD0 == 0 && pidD0bar == 0) {
+          hfSelD0Candidate(statusD0, statusD0bar, statusHFFlag, statusTopol, statusCand, statusPID);
+          if (applyMl) {
+            hfMlD0Candidate(outputMlD0, outputMlD0bar);
+          }
+          continue;
+        }
+
+        if ((pidD0 == -1 || pidD0 == 1) && topolD0) {
+          statusD0 = 1; // identified as D0
+        }
+        if ((pidD0bar == -1 || pidD0bar == 1) && topolD0bar) {
+          statusD0bar = 1; // identified as D0bar
+        }
+        statusPID = 1;
+      } else {
+        if (topolD0) {
+          statusD0 = 1; // identified as D0
+        }
+        if (topolD0bar) {
+          statusD0bar = 1; // identified as D0bar
+        }
       }
-      if ((pidD0bar == -1 || pidD0bar == 1) && topolD0bar) {
-        statusD0bar = 1; // identified as D0bar
-      }
-      statusPID = 1;
 
       if (applyMl) {
         // ML selections
@@ -368,11 +408,11 @@ struct HfCandidateSelectorD0 {
         bool isSelectedMlD0bar = false;
 
         if (statusD0 > 0) {
-          std::vector<float> inputFeaturesD0 = hfMlResponse.getInputFeatures(candidate, trackPos, trackNeg, o2::constants::physics::kD0);
+          std::vector<float> inputFeaturesD0 = hfMlResponse.getInputFeatures(candidate, o2::constants::physics::kD0);
           isSelectedMlD0 = hfMlResponse.isSelectedMl(inputFeaturesD0, ptCand, outputMlD0);
         }
         if (statusD0bar > 0) {
-          std::vector<float> inputFeaturesD0bar = hfMlResponse.getInputFeatures(candidate, trackPos, trackNeg, o2::constants::physics::kD0Bar);
+          std::vector<float> inputFeaturesD0bar = hfMlResponse.getInputFeatures(candidate, o2::constants::physics::kD0Bar);
           isSelectedMlD0bar = hfMlResponse.isSelectedMl(inputFeaturesD0bar, ptCand, outputMlD0bar);
         }
 
@@ -404,13 +444,13 @@ struct HfCandidateSelectorD0 {
     }
   }
 
-  void processWithDCAFitterN(aod::HfCand2Prong const& candidates, TracksSel const& tracks)
+  void processWithDCAFitterN(aod::HfCand2ProngWPid const& candidates, TracksSel const& tracks)
   {
     processSel<aod::hf_cand::VertexerType::DCAFitter>(candidates, tracks);
   }
   PROCESS_SWITCH(HfCandidateSelectorD0, processWithDCAFitterN, "process candidates selection with DCAFitterN", true);
 
-  void processWithKFParticle(soa::Join<aod::HfCand2Prong, aod::HfCand2ProngKF> const& candidates, TracksSel const& tracks)
+  void processWithKFParticle(soa::Join<aod::HfCand2ProngWPid, aod::HfCand2ProngKF> const& candidates, TracksSel const& tracks)
   {
     processSel<aod::hf_cand::VertexerType::KfParticle>(candidates, tracks);
   }
